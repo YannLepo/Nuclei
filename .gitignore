@@ -1,0 +1,38 @@
+###############################
+# Type of files to be ignored
+###############################
+*~
+
+*.net
+*.net.old
+*.log
+*.csv
+##Images
+*.png
+*.pgm
+*.pdf
+##Compiled
+*.o
+##Tex
+slides.pdf
+*.aux
+*.nav
+*.out
+*.snm
+*.toc
+*.vrb
+
+## Grid
+jobWrapper.sge
+grid_log*
+
+############################
+# Directories to be ignored
+############################
+OriginalCode/*
+Misc/
+__*
+Exp*
+exp*
+*Test*
+*test*
