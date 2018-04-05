@@ -1,9 +1,8 @@
-
 #!/bin/bash
 
 ### Parameters
-outDir=experiments/Test/
-n_train=10
+outDir=experiments/Test2/
+n_train=600
 n_test=10
 dataroot_images='data/train/images/'
 dataroot_masks='data/train/mask/'
@@ -27,7 +26,7 @@ fi
 echo 'Detec Nuclei ------------------------------------------------------'
 
 image_size=128
-n_crops=10
+n_crops=100
 epochs=100
 
 $py DetectNuclei.py --experiment $outDir --dataroot-images $dataroot_images\

@@ -54,9 +54,10 @@ class data():
                 
                 for i in range(len(list_of_data[0][1])):
                     tmp =  misc.imread(list_of_data[0][1][i], mode = 'F')
-                    eroded = (torch.from_numpy( ndimage.binary_erosion(tmp).astype(uint8)) ).float()
-                    temp_mask += eroded + 0.5 * (torch.from_numpy(tmp).float() - eroded) 
-                    
+                    er = ndimage.binary_erosion(tmp).astype(uint8)
+                    eroded = (torch.from_numpy( ndimage.binary_erosion(er).astype(uint8) ) ).float() * 255
+                    temp_mask += 2 * eroded  + (torch.from_numpy(tmp).float() - eroded)
+
                     # temp_mask += torch.from_numpy(
                     #     misc.imread(list_of_data[0][1][i], mode = 'F'))
 

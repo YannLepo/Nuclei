@@ -21,8 +21,6 @@ from matplotlib import pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 import matplotlib.patches as patches
 
-### Generic routines
-import functions
 
 #################################################################################
 ### Read args from command line or take the default values
@@ -42,7 +40,7 @@ parser.add_argument('--beta1', type=float, default=0.5, help='beta1 for adam. de
 parser.add_argument('--cuda'  , action='store_true', help='enables cuda')
 parser.add_argument('--plots'  , action='store_true', help='plot images')
 parser.add_argument('--ngpu'  , type=int, default=1, help='number of GPUs to use')
-parser.add_argument('--net', default='default_dir/ssd.pth', help="path to net, if continued training")
+parser.add_argument('--net', default='default_dir/net.pth', help="path to net, if continued training")
 parser.add_argument('--experiment', default='./Test', type=str, help='output directory')
 parser.add_argument('--optim', default='adam', help='[adam]|sgd|rms|adadelta')
 parser.add_argument('--seed', type=int, default=1)
@@ -63,9 +61,10 @@ if torch.cuda.is_available() and not opt.cuda:
 kwargs = {'num_workers': 1, 'pin_memory': True} if opt.cuda else {}
 
 #################################################################################
-def saveImages(tensor, name, directory='./Images/'):
-    grid = vutils.make_grid(tensor, normalize=True, range=None, scale_each=False, nrow=9)
-    vutils.save_image(grid, directory+name)
+def saveImages(tensor, name):
+    grid = vutils.make_grid(
+        tensor, normalize=True, range=None, scale_each=False, nrow=9)
+    vutils.save_image(grid, name)
 
 #################################################################################    
 def rle_encoding(x):
@@ -82,6 +81,7 @@ def rle_encoding(x):
         prev = b
     return run_lengths
 
+################################################################################
 from skimage.morphology import label # label regions
 def mask_to_rles(mask):
     lab_img = label(mask.squeeze().numpy() > 0.5)
@@ -89,6 +89,31 @@ def mask_to_rles(mask):
         lab_img[0,0] = 1 # ensure at least one prediction per image
     for i in range(1, lab_img.max()+1):
         yield rle_encoding(lab_img==i)
+
+################################################################################
+# Custom weights initialization
+def weights_init(m):
+    classname = m.__class__.__name__
+    if classname.find('Conv') != -1:
+        m.weight.data.normal_(0.0, 0.02)
+    elif classname.find('BatchNorm') != -1:
+        m.weight.data.normal_(1.0, 0.02)
+        m.bias.data.fill_(0)
+
+################################################################################
+# Function to reduce the learning rate automatically
+def reduce_learning_rate(optimizer, train_error, opt):
+    
+    # Reduce learning if the average loss increases on 3 out of 15 consecutive epoch
+    temp = torch.Tensor(train_error[-15:])
+    if (temp[1:] - temp[:-1] > 0).sum() > 2 :
+        print('********** Reducing learning rate **********')
+        opt.lr = opt.lr / 10
+        
+        for param_group in optimizer.param_groups:
+            param_group['lr'] = opt.lr
+        return True
+    return False
 
 #################################################################################
 ##### Functions        
@@ -144,7 +169,7 @@ def test(model, dtloader, epoch):
         if opt.plots and ind==0 :
             temp = torch.cat(
                 (data.sum(1).unsqueeze(1), target_thres.float(), thres.float()), 1).view(-1, 1, data.size(-2), data.size(-1))
-            saveImages(temp, "Test{:s}.png".format(str(epoch).zfill(3)), directory="./Images/")
+            saveImages(temp, '{:s}/Image{:s}.png'.format(opt.experiment, str(epoch).zfill(3)))
 
         ### TOBETESTED 
         ### train_row_rles = list(mask_to_rles(mask))
@@ -183,7 +208,7 @@ if not exists(opt.experiment):
 ngpu = int(opt.ngpu)
 nc = int(opt.nc)
 
-import models.net as net
+import net as net
 
 opt.size_model = opt.size_model.replace('[','').replace(']','').split(',')
 opt.size_model = [int(i) for i in opt.size_model]
@@ -195,7 +220,7 @@ if exists('{0}/net.pth'.format(opt.experiment)):
     print('Reading model {0}/net.pth'.format(opt.experiment) )
     model.load_state_dict(torch.load('{:s}/net.pth'.format(opt.experiment)))
 else:
-    model.apply(functions.weights_init)
+    model.apply(weights_init)
 
 if opt.cuda:
     model.cuda()
@@ -236,8 +261,15 @@ criterion = nn.MSELoss()
 # criterion = nn.L1Loss()
 
 def custom_loss(output, target, vol=False):
-    return criterion(output, Variable(target, volatile=vol))
+    tg = Variable(target, volatile=vol)
+    # return criterion(output, tg)
 
+    ### Make frontier more important in loss
+    mask_front  = ((tg > 0.40) * (tg < 0.66)).float()
+    ones  =  (tg > -1.0).float()
+    coef = 5
+    return criterion( (coef * mask_front + ones) * output,
+                      (coef * mask_front + ones) * tg )
 ################################################################################
 ### Train
 
@@ -248,8 +280,8 @@ for epoch in range(1, opt.epochs+1):
     train_error.append( train(model, optimizer, epoch) )
     test_error.append( test(model, testloader, epoch) )
     
-    if len(train_error) >= 45 and epoch >= last_reduction + 10:
-        if functions.reduce_learning_rate(optimizer, train_error, opt):
+    if len(train_error) >= 30 and epoch >= last_reduction + 10:
+        if reduce_learning_rate(optimizer, train_error, opt):
             last_reduction = epoch # to keep learning rate for at least 10 epochs
 
 
