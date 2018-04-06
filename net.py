@@ -79,7 +79,7 @@ class Net(nn.Module):
         self.upsample2 = nn.ConvTranspose2d(sizes[1]+sizes[1], sizes[0], 4, 2, 1)
         self.upsample1 = nn.ConvTranspose2d(sizes[0]+sizes[0], sizes[3], 4, 2, 1)
         
-        self.conv8 = nn.Conv2d(sizes[3]+sizes[0]+3, 1, kernel_size=(1,1), padding=(0,0))
+        self.conv8 = nn.Conv2d(sizes[3]+sizes[0]+3, 3, kernel_size=(1,1), padding=(0,0))
         
         self.epoch = 0
         
@@ -92,6 +92,6 @@ class Net(nn.Module):
         x4 = self.upsample3(x3)
         x5 = self.upsample2(torch.cat((x4, x2), 1))
         x6 = self.upsample1(torch.cat((x5, x1), 1))
-        x = F.sigmoid(self.conv8(torch.cat((x6, x, x0), 1)))
+        x = F.log_softmax(self.conv8(torch.cat((x6, x, x0), 1)))
                 
         return x

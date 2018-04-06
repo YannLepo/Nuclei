@@ -52,8 +52,6 @@ opt.manualSeed = opt.seed
 print("Random Seed: ", opt.manualSeed)
 random.seed(opt.manualSeed)
 torch.manual_seed(opt.manualSeed)
-CUDA_LAUNCH_BLOCKING=1
-cudnn.benchmark = False
 
 if torch.cuda.is_available() and not opt.cuda:
     print("WARNING: You have a CUDA device, so you should probably run with --cuda")
@@ -162,9 +160,11 @@ def test(model, dtloader, epoch):
             data, target = sample[0].cuda(), sample[1].cuda()
             
         output = model(Variable(data, volatile=True))
-        thres = (output.data > 0.66) + (output.data > 0.40) 
-        #thres = output.data.max(1)[1].unsqueeze(1)
-        target_thres = (target > 0.66) + (target > 0.40) 
+        #thres = (output.data > 0.66) + (output.data > 0.40) 
+        #target_thres = (target > 0.66) + (target > 0.40)
+        thres = output.data.max(1)[1].unsqueeze(1)
+        target_thres = target
+
         
         if opt.plots and ind==0 :
             temp = torch.cat(
@@ -253,23 +253,24 @@ print(model)
 #################################################################################
 # Loss
 
-# weight = torch.Tensor([1, 1]) # Weight applied on classes while computing the loss
-# if opt.cuda:
-#    weight = weight.cuda()
-# criterion = nn.NLLLoss2d()
-criterion = nn.MSELoss()
+weight = torch.Tensor([1, 5, 1]) # Weight applied on classes while computing the loss
+if opt.cuda:
+   weight = weight.cuda()
+criterion = nn.NLLLoss2d(weight)
+
+# criterion = nn.MSELoss()
 # criterion = nn.L1Loss()
 
 def custom_loss(output, target, vol=False):
     tg = Variable(target, volatile=vol)
-    # return criterion(output, tg)
+    return criterion(output, tg.squeeze())
 
-    ### Make frontier more important in loss
-    mask_front  = ((tg > 0.40) * (tg < 0.66)).float()
-    ones  =  (tg > -1.0).float()
-    coef = 5
-    return criterion( (coef * mask_front + ones) * output,
-                      (coef * mask_front + ones) * tg )
+    # ### Make frontier more important in loss
+    # mask_front  = ((tg > 0.40) * (tg < 0.66)).float()
+    # ones  =  (tg > -1.0).float()
+    # coef = 5
+    # return criterion( (coef * mask_front + ones) * output,
+    #                   (coef * mask_front + ones) * tg )
 ################################################################################
 ### Train
 
@@ -280,7 +281,7 @@ for epoch in range(1, opt.epochs+1):
     train_error.append( train(model, optimizer, epoch) )
     test_error.append( test(model, testloader, epoch) )
     
-    if len(train_error) >= 30 and epoch >= last_reduction + 10:
+    if len(train_error) >= 15 and epoch >= last_reduction + 10:
         if reduce_learning_rate(optimizer, train_error, opt):
             last_reduction = epoch # to keep learning rate for at least 10 epochs
 

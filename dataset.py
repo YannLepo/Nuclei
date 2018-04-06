@@ -51,16 +51,26 @@ class data():
                     misc.imread(list_of_data[0][0], mode = 'RGB')).unsqueeze(0).transpose(0,-1).squeeze().float()
                 
                 temp_mask = torch.Tensor(1, temp.size(-2), temp.size(-1)).fill_(0.0)
-                
+                test = None
                 for i in range(len(list_of_data[0][1])):
-                    tmp =  misc.imread(list_of_data[0][1][i], mode = 'F')
-                    er = ndimage.binary_erosion(tmp).astype(uint8)
-                    eroded = (torch.from_numpy( ndimage.binary_erosion(er).astype(uint8) ) ).float() * 255
-                    temp_mask += 2 * eroded  + (torch.from_numpy(tmp).float() - eroded)
-
+                    ### Binary image
                     # temp_mask += torch.from_numpy(
                     #     misc.imread(list_of_data[0][1][i], mode = 'F'))
 
+                    ### Background = 0, boundary = 1, cell = 2
+                    tmp =  misc.imread(list_of_data[0][1][i], mode = 'F')
+                    er = ndimage.binary_erosion(tmp).astype(uint8)
+                    eroded = (torch.from_numpy( ndimage.binary_erosion(er).astype(uint8) ) ).float()
+                    temp_mask += 2 * eroded  + ((torch.from_numpy(tmp)>0).float() - eroded)
+
+                    ### Level set
+                #     tmp =  misc.imread(list_of_data[0][1][i], mode = 'F')
+                #     if test is None:
+                #         test = ndimage.binary_erosion(ndimage.binary_erosion(tmp)).astype(uint8)
+                #     else:
+                #         test += ndimage.binary_erosion(ndimage.binary_erosion(tmp)).astype(uint8)
+                # temp_mask = (torch.from_numpy(ndimage.distance_transform_edt(test))).unsqueeze(0).float()
+                                             
                 data.append( [temp, temp_mask] )
                 list_of_data.remove(list_of_data[0])
                 
@@ -76,7 +86,6 @@ class data():
             
     #############################################################################       
     def __getitem__(self, index):
-
 
         ### Random flip
         def flipTensor(img, dim):
@@ -120,6 +129,6 @@ class data():
                     tensor[i].mul_(1/(tensor[i].max() - tensor[i].min() ))
             return tensor
         
-        self.data = [[norm(dt[0]), norm(dt[1])] for dt in self.data ]
+        self.data = [[norm(dt[0]), dt[1].long()] for dt in self.data ]
 
 #################################################################################

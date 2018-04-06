@@ -1,9 +1,9 @@
 #!/bin/bash
 
 ### Parameters
-outDir=experiments/Test2/
+outDir=experiments/Test3/
 n_train=600
-n_test=10
+n_test=20
 dataroot_images='data/train/images/'
 dataroot_masks='data/train/mask/'
 
