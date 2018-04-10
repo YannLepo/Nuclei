@@ -1,12 +1,10 @@
 from os import listdir
 from os.path import isfile, join, isdir
-from random import seed, randint, random
-seed(1)
+from random import seed, randint, uniform
 
 import torch
 import torchvision
 from numpy import sqrt, uint8
-
 from scipy import misc, ndimage
 
 #################################################################################
@@ -50,26 +48,30 @@ class data():
                 temp = torch.from_numpy(
                     misc.imread(list_of_data[0][0], mode = 'RGB')).unsqueeze(0).transpose(0,-1).squeeze().float()
                 
-                temp_mask = torch.Tensor(1, temp.size(-2), temp.size(-1)).fill_(0.0)
+                temp_mask = torch.Tensor(3, temp.size(-2), temp.size(-1)).fill_(0.0)
+                temp_mask[0] = 1.0
+                
                 test = None
                 for i in range(len(list_of_data[0][1])):
-                    ### Binary image
+                    # ### Binary image
                     # temp_mask += torch.from_numpy(
                     #     misc.imread(list_of_data[0][1][i], mode = 'F'))
 
-                    ### Background = 0, boundary = 1, cell = 2
+                    # ### Labeled image: Background = 0, boundary = 1, cell = 2
+                    # tmp =  misc.imread(list_of_data[0][1][i], mode = 'F')
+                    # er = ndimage.binary_erosion(tmp).astype(uint8)
+                    # eroded = (torch.from_numpy( ndimage.binary_erosion( er ).astype(uint8) ) ).float()
+                    # # eroded = (torch.from_numpy( ndimage.binary_erosion( tmp ).astype(uint8) ) ).float()
+                    # temp_mask += 2 * eroded  + ((torch.from_numpy(tmp)>0).float() - eroded)
+
+                    ### Hot vector : Background = 0, boundary = 1, cell = 2
                     tmp =  misc.imread(list_of_data[0][1][i], mode = 'F')
                     er = ndimage.binary_erosion(tmp).astype(uint8)
-                    eroded = (torch.from_numpy( ndimage.binary_erosion(er).astype(uint8) ) ).float()
-                    temp_mask += 2 * eroded  + ((torch.from_numpy(tmp)>0).float() - eroded)
+                    eroded = (torch.from_numpy( ndimage.binary_erosion( er ).astype(uint8) ) )
 
-                    ### Level set
-                #     tmp =  misc.imread(list_of_data[0][1][i], mode = 'F')
-                #     if test is None:
-                #         test = ndimage.binary_erosion(ndimage.binary_erosion(tmp)).astype(uint8)
-                #     else:
-                #         test += ndimage.binary_erosion(ndimage.binary_erosion(tmp)).astype(uint8)
-                # temp_mask = (torch.from_numpy(ndimage.distance_transform_edt(test))).unsqueeze(0).float()
+                    temp_mask[0][ eroded  + ((torch.from_numpy(tmp)>0) - eroded)] = 0.0
+                    temp_mask[1][ ((torch.from_numpy(tmp)>0) - eroded) ] = 1.0
+                    temp_mask[2][ eroded ] = 1.0
                                              
                 data.append( [temp, temp_mask] )
                 list_of_data.remove(list_of_data[0])
@@ -88,31 +90,41 @@ class data():
     def __getitem__(self, index):
 
         ### Random flip
-        def flipTensor(img, dim):
-            return img.index_select(dim, torch.linspace(img.size(dim)-1, 0, img.size(dim)).long())
-        
-        ### Get an image and its mask, crop everything to a fixed size
-        ind = index // self.nb_crops
+        def flipTensor(img):
+            width = img[0].size(-1)
+            height = img[0].size(-2)
+            if randint(0,1):
+                img[0] = img[0].index_select(-1, torch.linspace(width-1, 0, width).long())
+                img[1] = img[1].index_select(-1, torch.linspace(width-1, 0, width).long())
+            if randint(0,1):
+                img[0] = img[0].index_select(-2, torch.linspace(height-1, 0, height).long())
+                img[1] = img[1].index_select(-2, torch.linspace(height-1, 0, height).long())
+            return img
 
-        height = self.data[ind][0].size(-2)
-        width = self.data[ind][0].size(-1)
-        image_size = self.image_size
+        def getImage(ind):
+            height = self.data[ind][0].size(-2)
+            width = self.data[ind][0].size(-1)
+            image_size = self.image_size
               
-        rand_h = randint(0, max(0, height-image_size))
-        rand_w = randint(0, max(0, width-image_size)) 
+            rand_h = randint(0, max(0, height-image_size))
+            rand_w = randint(0, max(0, width-image_size)) 
 
-        image = self.data[ind][0][:,rand_h:rand_h+image_size,rand_w:rand_w+image_size]
-        mask =  self.data[ind][1][:,rand_h:rand_h+image_size,rand_w:rand_w+image_size]
+            image = self.data[ind][0][:,rand_h:rand_h+image_size,rand_w:rand_w+image_size]
+            mask =  self.data[ind][1][:,rand_h:rand_h+image_size,rand_w:rand_w+image_size]
 
-        # flip horizontally
-        if randint(0,1):
-            image = flipTensor(image, -1)
-            mask = flipTensor(mask, -1)
-            
-        # flip vertically
-        if randint(0,1):
-            image = flipTensor(image, -2)
-            mask = flipTensor(mask, -2)
+            return flipTensor([image, mask])
+         
+        ### Get an image and its mask, crop everything to a fixed size
+        cur_ind = index // self.nb_crops
+        rand_ind = randint(0, len(self.data)-1)
+
+        tmp_ind = getImage(cur_ind)
+        tmp_randind = getImage(rand_ind)
+
+        lamb = uniform(0, 0.3)
+        
+        image = lamb * tmp_ind[0] + (1-lamb) * tmp_randind[0]
+        mask = lamb * tmp_ind[1].float() + (1-lamb) * tmp_randind[1].float()
         
         return image, mask
     

@@ -1,35 +1,19 @@
-###TOBEDONE Clean imports
 from __future__ import print_function
 import argparse
-import random
 import torch
-import torch.nn as nn
 import torch.backends.cudnn as cudnn
-import torch.optim as optim
-import torch.utils.data
-from torch.autograd import Variable
 import torchvision.utils as vutils
-import torch.nn.functional as F
 
 ### System related
 from sys import path
-from os import makedirs
-from os.path import exists
+from os import makedirs, listdir
+from os.path import exists, isfile, join, isdir
 
-### Plots
-import matplotlib
-matplotlib.use('Agg')
-from matplotlib import pyplot as plt
-from matplotlib.backends.backend_pdf import PdfPages
-import matplotlib.patches as patches
-
+### Useful functions for post processing and formatting for submission
 from skimage.morphology import label # label regions
 from scipy import misc, ndimage
-
-from os import listdir
-from os.path import isfile, join, isdir
-
 import numpy as np
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
 
 #################################################################################
 ### Read args from command line or take the default values
@@ -37,13 +21,13 @@ import numpy as np
 parser = argparse.ArgumentParser()
 parser.add_argument('--dataroot-images', default='data/stage1_test/', help='path to dataset')
 parser.add_argument('--workers', type=int, help='number of data loading workers', default=1)
-parser.add_argument('--n_test', type=int, default=2, help='number of test images')
+parser.add_argument('--n_test', type=int, default=1000, help='number of test images')
 parser.add_argument('--nc', type=int, default=3, help='number of color channels of input')
 parser.add_argument('--cuda'  , action='store_true', help='enables cuda')
 parser.add_argument('--plots'  , action='store_true', help='plot images')
 parser.add_argument('--ngpu'  , type=int, default=1, help='number of GPUs to use')
 parser.add_argument('--net', default='default_dir/net.pth', help="path to net, if continued training")
-parser.add_argument('--experiment', default='./experiments/Test3/', type=str, help='output directory')
+parser.add_argument('--experiment', default='./experiments/Test5/', type=str, help='output directory')
 parser.add_argument('--size_model', default='[10,10,10,10,10,10,10,10]', type=str, help='size of the model')
 
 opt = parser.parse_args()
@@ -117,12 +101,12 @@ dataset = data(opt.dataroot_images, nb_images = opt.n_test)
 dataset.normalize()
 
 ################################################################################
-### Create/Read network and initialize
+### Read network
 try:
     exists(opt.experiment) & exists('{0}/net.pth'.format(opt.experiment))
 except ValueError:
     print("No trained model to read.")
-    #break
+    #TOBEDONE Stop execution
 
 ngpu = int(opt.ngpu)
 nc = int(opt.nc)
@@ -166,8 +150,9 @@ for ind in range(0, len(dataset)):
 
     classes = torch.Tensor(1, 1, sizes[-2], sizes[-1]).fill_(0.0)
     classes[:, :, :height, :width] = output.data[0:1].max(1)[1].unsqueeze(1)[:, :, :height, :width]
-    if (sizes[-2]%16 != 0) | (sizes[-1]%16 != 0):
+    if (sizes[-2]%16 != 0):
         classes[:, :, height:, -width:] = output.data[1:].max(1)[1].unsqueeze(1)[:, :, height-sizes[-2]%16:, :]
+    if (sizes[-1]%16 != 0):
         classes[:, :, -height:, width:] = output.data[1:].max(1)[1].unsqueeze(1)[:, :, :, width-sizes[-1]%16:]
         
     if opt.plots:
@@ -175,30 +160,46 @@ for ind in range(0, len(dataset)):
             (data.sum(1).unsqueeze(1), classes.float()), 1).view(-1, 1, data.size(-2), data.size(-1))
         saveImages(temp, '{:s}/Test{:s}.png'.format(opt.experiment, str(ind).zfill(3)))
 
-    mask_frontier = ((classes > 0) * (classes < 2)).squeeze().byte()
-    lab_img = torch.from_numpy( label( (classes > 1).squeeze().numpy() ) )
-    _, lab_ind = ndimage.distance_transform_edt((classes < 1).squeeze().numpy(), return_indices=True)
+#     mask_frontier = ((classes > 0) * (classes < 2)).squeeze().byte()
+#     lab_img = torch.from_numpy( label( (classes > 1).squeeze().numpy() ) )
+#     _, lab_ind = ndimage.distance_transform_edt((classes < 1).squeeze().numpy(), return_indices=True)
 
-    lab_ind_height = torch.from_numpy(lab_ind[0])[mask_frontier].long().view(-1)
-    lab_ind_width = torch.from_numpy(lab_ind[1])[mask_frontier].long().view(-1)
-    lab_img[mask_frontier] = lab_img[lab_ind_height,:][:, lab_ind_width]
+#     ### Attribute frontiers to closest label
+#     lab_ind_height = torch.from_numpy(lab_ind[0])[mask_frontier].long().view(-1)
+#     lab_ind_width = torch.from_numpy(lab_ind[1])[mask_frontier].long().view(-1)
+#     lab_img[mask_frontier] = lab_img[lab_ind_height,:][:, lab_ind_width]
 
-    ### TOBEDONE
-    ### Make sure that labels are connexe components, if not separate into two labels
-    ### Compute labels on each label, output should be 2, if more than 2 split into two labels
+#     ### If labeled regions are non connexe divide into two labels
+#     ### TOBETESTED
+#     lab_max = lab_img.max() + 1
+#     for i in range(1, lab_img.max()+1):
+#         label_of_label =  label( (lab_img==i).numpy() )
+#         ###
+#         lab_img[ lab_img==i & torch.from_numpy(label_of_label) > 1 ] += lab_max
+#         lab_max += len( np.unique( label_of_label )) - 2
+#         ###
+#         for j in range(2, len( np.unique( label_of_label )) ):
+#             lab_img[ lab_img==i & torch.from_numpy(label_of_label) == j ] = lab_max
+#             lab_max += 1
+
+#     ### TOBEDONE Check if filling is needed
     
-    if lab_img.max()<1:
-        lab_img[0,0] = 1 # ensure at least one prediction per image
-        
-    for i in range(1, lab_img.max()+1):
-        dots = np.where( (lab_img==i).numpy().T.flatten()==1)[0] # .T sets Fortran order down-then-right
+#     if lab_img.max()<1:
+#         lab_img[0,0] = 1 # ensure at least one prediction per image
+    
+#     out_pred_list = []
+#     for i in range(1, lab_img.max()+1):
+       
+#         dots = np.where( (lab_img==i).numpy().T.flatten()==1)[0] # .T sets Fortran order down-then-right
 
-        run_lengths = []
-        prev = -2
-        for b in dots:
-            if (b>prev+1): run_lengths.extend((b+1, 0))
-            run_lengths[-1] += 1
-            prev = b
+#         run_lengths = []
+#         prev = -2
+#         for b in dots:
+#             if (b>prev+1): run_lengths.extend((b+1, 0))
+#             run_lengths[-1] += 1
+#             prev = b
             
-        print(name, run_lengths)
-        ### TOBEDONE Write [name run_lengths(with only space)] into csv file       
+#         print(name, run_lengths)
+#     out_pred_list+=[dict(ImageId=name, EncodedPixels = ' '.join(np.array(run_lengths).astype(str)))]
+
+# out_pred_df = pd.DataFrame(out_pred_list)

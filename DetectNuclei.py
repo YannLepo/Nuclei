@@ -8,19 +8,12 @@ import torch.optim as optim
 import torch.utils.data
 from torch.autograd import Variable
 import torchvision.utils as vutils
+import torch.nn.functional as F
 
 ### System related
 from sys import path
 from os import makedirs
 from os.path import exists
-
-### Plots
-import matplotlib
-matplotlib.use('Agg')
-from matplotlib import pyplot as plt
-from matplotlib.backends.backend_pdf import PdfPages
-import matplotlib.patches as patches
-
 
 #################################################################################
 ### Read args from command line or take the default values
@@ -42,7 +35,6 @@ parser.add_argument('--plots'  , action='store_true', help='plot images')
 parser.add_argument('--ngpu'  , type=int, default=1, help='number of GPUs to use')
 parser.add_argument('--net', default='default_dir/net.pth', help="path to net, if continued training")
 parser.add_argument('--experiment', default='./Test', type=str, help='output directory')
-parser.add_argument('--optim', default='adam', help='[adam]|sgd|rms|adadelta')
 parser.add_argument('--seed', type=int, default=1)
 parser.add_argument('--size_model', default='[10,10,10,10,10,10,10,10]', type=str, help='size of the model')
 parser.add_argument('--thres', type=float, default=0.66, help='threshold for classification')
@@ -63,30 +55,6 @@ def saveImages(tensor, name):
     grid = vutils.make_grid(
         tensor, normalize=True, range=None, scale_each=False, nrow=9)
     vutils.save_image(grid, name)
-
-#################################################################################    
-def rle_encoding(x):
-    '''
-    x: numpy array of shape (height, width), 1 - mask, 0 - background
-    Returns run length as list
-    '''
-    dots = np.where(x.T.flatten()==1)[0] # .T sets Fortran order down-then-right
-    run_lengths = []
-    prev = -2
-    for b in dots:
-        if (b>prev+1): run_lengths.extend((b+1, 0))
-        run_lengths[-1] += 1
-        prev = b
-    return run_lengths
-
-################################################################################
-from skimage.morphology import label # label regions
-def mask_to_rles(mask):
-    lab_img = label(mask.squeeze().numpy() > 0.5)
-    if lab_img.max()<1:
-        lab_img[0,0] = 1 # ensure at least one prediction per image
-    for i in range(1, lab_img.max()+1):
-        yield rle_encoding(lab_img==i)
 
 ################################################################################
 # Custom weights initialization
@@ -160,19 +128,13 @@ def test(model, dtloader, epoch):
             data, target = sample[0].cuda(), sample[1].cuda()
             
         output = model(Variable(data, volatile=True))
-        #thres = (output.data > 0.66) + (output.data > 0.40) 
-        #target_thres = (target > 0.66) + (target > 0.40)
         thres = output.data.max(1)[1].unsqueeze(1)
-        target_thres = target
-
+        target_thres =  target.max(1)[1].unsqueeze(1)
         
         if opt.plots and ind==0 :
-            temp = torch.cat(
-                (data.sum(1).unsqueeze(1), target_thres.float(), thres.float()), 1).view(-1, 1, data.size(-2), data.size(-1))
+            temp = torch.cat((data.sum(1).unsqueeze(1), target_thres.float(), thres.float()),
+                             1).view(-1, 1, data.size(-2), data.size(-1))
             saveImages(temp, '{:s}/Image{:s}.png'.format(opt.experiment, str(epoch).zfill(3)))
-
-        ### TOBETESTED 
-        ### train_row_rles = list(mask_to_rles(mask))
             
         test_loss += custom_loss(output, target, vol=True).data[0]
             
@@ -212,10 +174,9 @@ import net as net
 
 opt.size_model = opt.size_model.replace('[','').replace(']','').split(',')
 opt.size_model = [int(i) for i in opt.size_model]
-
 model = net.Net(opt.size_model)
 
-### If models exist, read their states and continue training, else initialize
+### If model exists, read its states, else initialize
 if exists('{0}/net.pth'.format(opt.experiment)):
     print('Reading model {0}/net.pth'.format(opt.experiment) )
     model.load_state_dict(torch.load('{:s}/net.pth'.format(opt.experiment)))
@@ -226,22 +187,11 @@ if opt.cuda:
     model.cuda()
     
 ### Setup optimizer
-if opt.optim == 'adam':
-    optimizer = optim.Adam(model.parameters(), lr=opt.lr,
-                           betas=(opt.beta1, 0.999))
-elif  opt.optim == 'rms':
-    optimizer = optim.RMSprop(model.parameters(), lr = opt.lr, momentum=0)
-elif  opt.optim == 'adadelta':
-    optimizer = optim.Adadelta(model.parameters(), lr= opt.lr, rho=0.9,
-                               eps=1e-06, weight_decay=0)
-elif  opt.optim == 'sgd':
-    optimizer = optim.SGD(model.parameters(), lr=opt.lr, momentum=0.9, weight_decay=0.0005)
-    
+optimizer = optim.Adam(model.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
 assert optimizer
 
-### Additional variables
+### Additional buffers
 log = {'train_acc', 'test_acc'}
-
 train_error = []
 test_error = []
 
@@ -252,25 +202,39 @@ print(model)
 
 #################################################################################
 # Loss
+filt = torch.Tensor(8,1,3,3).fill_(0.0)
+filt[:,:,1,1] = 1.0
+filt[0,:,0,0] = -1.0
+filt[1,:,0,1] = -1.0
+filt[2,:,0,2] = -1.0
+filt[3,:,1,0] = -1.0
+filt[4,:,1,2] = -1.0
+filt[5,:,2,0] = -1.0
+filt[6,:,2,1] = -1.0
+filt[7,:,2,2] = -1.0
 
-weight = torch.Tensor([1, 5, 1]) # Weight applied on classes while computing the loss
 if opt.cuda:
-   weight = weight.cuda()
-criterion = nn.NLLLoss2d(weight)
+    filt = filt.cuda()
 
-# criterion = nn.MSELoss()
-# criterion = nn.L1Loss()
+def custom_loss(input, target, size_average=True, vol=False):
+    
+    weight = torch.Tensor([1, 5, 2]) # Weight applied on classes while computing the loss
+    weight = Variable(weight.view(3,1,1).expand_as(input))
+    if opt.cuda:
+        weight = weight.cuda()
+    
+    input = F.log_softmax(input)
+    loss = -torch.sum(weight * input * Variable(target, volatile=vol))
+    
+    temp = input.max(1)[1].unsqueeze(1).float()
+    temp = F.conv2d(temp, Variable(filt))
+    constraint = 1000*torch.norm( (temp.sum(1) > 1).view(input.size(0),-1).float(), 2, 1).sum()
 
-def custom_loss(output, target, vol=False):
-    tg = Variable(target, volatile=vol)
-    return criterion(output, tg.squeeze())
+    if size_average:
+        return (loss  + constraint )/ input.size(0)
+    else:
+        return loss + constraint
 
-    # ### Make frontier more important in loss
-    # mask_front  = ((tg > 0.40) * (tg < 0.66)).float()
-    # ones  =  (tg > -1.0).float()
-    # coef = 5
-    # return criterion( (coef * mask_front + ones) * output,
-    #                   (coef * mask_front + ones) * tg )
 ################################################################################
 ### Train
 
